@@ -1,3 +1,16 @@
+/**
+ * Route integration tests — indexer polling is stubbed so no Soroban RPC calls run.
+ */
+jest.mock('../../src/services/indexer', () => {
+  const actual = jest.requireActual('../../src/services/indexer');
+  return {
+    ...actual,
+    startIndexer: jest.fn(),
+    stopIndexer: jest.fn(),
+    indexEvents: jest.fn().mockResolvedValue(undefined),
+  };
+});
+
 import request from 'supertest';
 import app from '../../src/index';
 
