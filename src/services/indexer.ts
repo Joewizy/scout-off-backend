@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { server } from './stellar';
 import config from '../config';
-import { EventRecord, ContractEventType } from '../types';
+import { EventRecord, ContractEventType, ContractEvent } from '../types';
 
 // ─── Deduplication strategy ───────────────────────────────────────────────────
 //
@@ -24,6 +24,35 @@ import { EventRecord, ContractEventType } from '../types';
  */
 export function normalizeEventId(contractId: string, ledger: number, txHash: string): string {
   return `${contractId}:${ledger}:${txHash}`;
+}
+
+/** Raw Soroban event shape returned by SorobanRpc.Server.getEvents(). */
+export type RawContractEvent = {
+  ledger: number;
+  txHash: string;
+  topic: Array<{ value: () => unknown }>;
+  value?: { value: () => unknown };
+};
+
+/**
+ * Parse a raw on-chain contract event into a normalized ContractEvent.
+ */
+export function parseContractEvent(contractId: string, raw: RawContractEvent): ContractEvent & { eventId: string } {
+  const type = raw.topic[0]?.value() as ContractEventType;
+  const payload = (raw.value?.value() ?? {}) as Record<string, unknown>;
+  const eventId = normalizeEventId(contractId, raw.ledger, raw.txHash);
+  return { eventId, type, ledger: raw.ledger, txHash: raw.txHash, payload };
+}
+
+/**
+ * Placeholder for event deduplication before persistence.
+ * DB-level dedup uses UNIQUE(tx_hash) + INSERT OR IGNORE; extend this for
+ * in-memory caches or secondary indexes.
+ */
+export function isEventDuplicate(eventId: string, seen?: Set<string>): boolean {
+  if (seen?.has(eventId)) return true;
+  // TODO: optional DB lookup by eventId / tx_hash
+  return false;
 }
 
 // Stub hook — replace with real logic as needed (e.g. metrics, alerting).
@@ -67,6 +96,9 @@ function setLastLedger(ledger: number): void {
 
 // ─── Indexer ─────────────────────────────────────────────────────────────────
 
+const POLL_INTERVAL_MS = 5_000;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
 const insert = db.prepare(
   'INSERT OR IGNORE INTO events (type, ledger, tx_hash, payload) VALUES (?, ?, ?, ?)'
 );
@@ -82,16 +114,14 @@ export async function indexEvents(): Promise<void> {
   if (!response.events.length) return;
 
   const insertMany = db.transaction((events: typeof response.events) => {
+    const seen = new Set<string>();
     for (const raw of events) {
-      const eventId = normalizeEventId(config.contractId, raw.ledger, raw.txHash);
-      onBeforeInsert(eventId);
-      insert.run(
-        raw.topic[0]?.value() as string,
-        raw.ledger,
-        raw.txHash,
-        JSON.stringify(raw.value?.value() ?? {})
-      );
-      onAfterInsert(eventId);
+      const parsed = parseContractEvent(config.contractId, raw);
+      if (isEventDuplicate(parsed.eventId, seen)) continue;
+      seen.add(parsed.eventId);
+      onBeforeInsert(parsed.eventId);
+      insert.run(parsed.type, parsed.ledger, parsed.txHash, JSON.stringify(parsed.payload));
+      onAfterInsert(parsed.eventId);
     }
   });
 
@@ -99,6 +129,32 @@ export async function indexEvents(): Promise<void> {
 
   const latest = response.events.at(-1)!;
   setLastLedger(latest.ledger + 1);
+}
+
+/** Start polling for new contract events. Safe to call once; repeated calls are ignored. */
+export function startIndexer(
+  intervalMs: number = POLL_INTERVAL_MS,
+  onError?: (err: Error) => void
+): void {
+  if (pollTimer) return;
+
+  const poll = async () => {
+    try {
+      await indexEvents();
+    } catch (err) {
+      onError?.(err as Error);
+    }
+  };
+
+  poll();
+  pollTimer = setInterval(poll, intervalMs);
+}
+
+/** Stop the event polling loop. No-op when the indexer is not running. */
+export function stopIndexer(): void {
+  if (!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
 }
 
 // ─── Query helpers ────────────────────────────────────────────────────────────
