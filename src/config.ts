@@ -665,9 +665,6 @@ const config = {
   /** Minimum response size in bytes to trigger compression (default: 1024 bytes). */
   compressionThresholdBytes: parseNumericEnv('COMPRESSION_THRESHOLD', process.env.COMPRESSION_THRESHOLD ?? process.env.COMPRESSION_THRESHOLD_BYTES, 1024, { min: 1, integer: true }),
 
-  /** Base retry interval in milliseconds for SSE reconnect hints (default: 5000 ms). */
-  sseRetryMs: parseNumericEnv('SSE_RETRY_MS', process.env.SSE_RETRY_MS, 5000, { min: 1, integer: true }),
-
   /**
    * Maximum indexer ledger lag (in ledgers) allowed for readiness check.
    * If the indexer is more than this many ledgers behind the chain tip,
@@ -725,13 +722,19 @@ const config = {
   },
 
   // ── Server-Sent Events (SSE) ──────────────────────────────────────────
+  // Read through the getters in src/routes/events.ts; tests override these
+  // fields directly (e.g. `config.sse.maxConnections = 1`).
   sse: {
     /** Interval between keep-alive pings sent to SSE clients (ms). */
-    keepaliveIntervalMs: parseNumericEnv('SSE_KEEPALIVE_INTERVAL_MS', process.env.SSE_KEEPALIVE_INTERVAL_MS, 15000, { min: 1, integer: true }),
+    keepaliveIntervalMs: parseNumericEnv('SSE_KEEPALIVE_INTERVAL_MS', process.env.SSE_KEEPALIVE_INTERVAL_MS, 15000, { min: 1000, max: 120000, integer: true }),
+    /** Interval for shared SSE auth sweep (re-check revocations, blocklists) (ms). */
+    authSweepIntervalMs: parseNumericEnv('SSE_AUTH_SWEEP_INTERVAL_MS', process.env.SSE_AUTH_SWEEP_INTERVAL_MS, 30000, { min: 1000, max: 600000, integer: true }),
     /** Max concurrent SSE connections (0 = unlimited). */
     maxConnections: parseNumericEnv('SSE_MAX_CONNECTIONS', process.env.SSE_MAX_CONNECTIONS, 0, { min: 0, integer: true }),
-    /** Interval for shared SSE auth sweep (re-check revocations, blocklists). */
-    authSweepIntervalMs: parseNumericEnv('SSE_AUTH_SWEEP_INTERVAL_MS', process.env.SSE_AUTH_SWEEP_INTERVAL_MS, 30000, { min: 1, integer: true }),
+    /** Max concurrent SSE connections per authenticated wallet (0 = unlimited). */
+    maxConnectionsPerWallet: parseNumericEnv('SSE_MAX_CONNECTIONS_PER_WALLET', process.env.SSE_MAX_CONNECTIONS_PER_WALLET, 5, { min: 0, integer: true }),
+    /** Base retry interval for SSE reconnect hints (ms); jitter is added per connection. */
+    retryMs: parseNumericEnv('SSE_RETRY_MS', process.env.SSE_RETRY_MS, 5000, { min: 1, max: 300000, integer: true }),
   },
 
   // ── Wallet / cache settings ───────────────────────────────────────────

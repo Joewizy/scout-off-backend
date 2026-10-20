@@ -252,10 +252,16 @@ env:
   DB_PATH: /data/scout-off.db
   # Platform fee in basis points (100 bps = 1%). Default: 500 (5%).
   PLATFORM_FEE_BPS: "500"
-  # SSE keep-alive interval in ms
+  # SSE keep-alive interval in ms (1000-120000)
   SSE_KEEPALIVE_INTERVAL_MS: "15000"
+  # SSE authorization sweep interval in ms (1000-600000); bounds cross-instance revocation detection
+  SSE_AUTH_SWEEP_INTERVAL_MS: "30000"
   # Maximum concurrent SSE connections (0 = unlimited)
   SSE_MAX_CONNECTIONS: "0"
+  # Maximum concurrent SSE connections per wallet (0 = unlimited)
+  SSE_MAX_CONNECTIONS_PER_WALLET: "5"
+  # Base SSE reconnect delay in ms sent to clients (jitter is added per connection)
+  SSE_RETRY_MS: "5000"
   # Request timeout in ms
   REQUEST_TIMEOUT_MS: "30000"
   # Rate limiting

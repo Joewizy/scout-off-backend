@@ -650,3 +650,81 @@ describe('parseNumericEnv validation', () => {
     delete process.env.COMPRESSION_THRESHOLD_BYTES;
   });
 });
+
+describe('config.sse validation', () => {
+  const vars = [
+    'SSE_KEEPALIVE_INTERVAL_MS',
+    'SSE_AUTH_SWEEP_INTERVAL_MS',
+    'SSE_MAX_CONNECTIONS',
+    'SSE_MAX_CONNECTIONS_PER_WALLET',
+    'SSE_RETRY_MS',
+  ];
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of vars) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.JWT_SECRET = 'test-secret';
+  });
+
+  afterEach(() => {
+    for (const key of vars) {
+      if (savedEnv[key] !== undefined) {
+        process.env[key] = savedEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+    jest.resetModules();
+  });
+
+  async function loadConfig() {
+    jest.resetModules();
+    return (await import('../src/config')).default;
+  }
+
+  it('uses defaults when unset', async () => {
+    const cfg = await loadConfig();
+    expect(cfg.sse).toEqual({
+      keepaliveIntervalMs: 15000,
+      authSweepIntervalMs: 30000,
+      maxConnections: 0,
+      maxConnectionsPerWallet: 5,
+      retryMs: 5000,
+    });
+  });
+
+  it('reads valid values from the environment', async () => {
+    process.env.SSE_KEEPALIVE_INTERVAL_MS = '20000';
+    process.env.SSE_AUTH_SWEEP_INTERVAL_MS = '60000';
+    process.env.SSE_MAX_CONNECTIONS = '100';
+    process.env.SSE_MAX_CONNECTIONS_PER_WALLET = '0';
+    process.env.SSE_RETRY_MS = '2500';
+    const cfg = await loadConfig();
+    expect(cfg.sse).toEqual({
+      keepaliveIntervalMs: 20000,
+      authSweepIntervalMs: 60000,
+      maxConnections: 100,
+      maxConnectionsPerWallet: 0,
+      retryMs: 2500,
+    });
+  });
+
+  it.each([
+    ['SSE_KEEPALIVE_INTERVAL_MS', 'abc'],
+    ['SSE_KEEPALIVE_INTERVAL_MS', '999'],
+    ['SSE_KEEPALIVE_INTERVAL_MS', '120001'],
+    ['SSE_AUTH_SWEEP_INTERVAL_MS', '0'],
+    ['SSE_AUTH_SWEEP_INTERVAL_MS', '600001'],
+    ['SSE_MAX_CONNECTIONS', '-1'],
+    ['SSE_MAX_CONNECTIONS_PER_WALLET', 'abc'],
+    ['SSE_MAX_CONNECTIONS_PER_WALLET', '-1'],
+    ['SSE_RETRY_MS', '0'],
+  ])('%s=%s fails at startup', async (name, value) => {
+    process.env[name] = value;
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow(name);
+  });
+});
