@@ -752,16 +752,20 @@ const config = {
   milestoneLoaderConcurrency: parseNumericEnv('MILESTONE_LOADER_CONCURRENCY', process.env.MILESTONE_LOADER_CONCURRENCY, 8, { min: 1, integer: true }),
 
   // ── Reindexing / catch-up mode ────────────────────────────────────────
-  /** Ledger lag threshold for entering catch-up mode (ledgers). */
-  reindexCatchupThreshold: parseNumericEnv('REINDEX_CATCHUP_THRESHOLD', process.env.REINDEX_CATCHUP_THRESHOLD, 500, { min: 1, integer: true }),
-  /** Ledgers processed per batch in catch-up mode. */
-  reindexCatchupBatchSize: parseNumericEnv('REINDEX_CATCHUP_BATCH_SIZE', process.env.REINDEX_CATCHUP_BATCH_SIZE, 500, { min: 1, integer: true }),
-  /** Ledgers processed per batch in steady-state mode. */
-  reindexBatchSize: parseNumericEnv('REINDEX_BATCH_SIZE', process.env.REINDEX_BATCH_SIZE, 100, { min: 1, integer: true }),
-  /** Delay between reindex batches (ms). */
-  reindexBatchDelayMs: parseNumericEnv('REINDEX_BATCH_DELAY_MS', process.env.REINDEX_BATCH_DELAY_MS, 50, { min: 0, integer: true }),
-  /** Backoff when RPC returns rate-limit errors during reindex (ms). */
-  reindexRateLimitBackoffMs: parseNumericEnv('REINDEX_RATE_LIMIT_BACKOFF_MS', process.env.REINDEX_RATE_LIMIT_BACKOFF_MS, 2000, { min: 1, integer: true }),
+  // Batch sizes are capped at 10 000 ledgers, the maximum reindex range
+  // (MAX_REINDEX_RANGE in src/services/reindexService.ts).
+  reindex: {
+    /** Ledgers processed per batch in steady-state mode. */
+    batchSize: parseNumericEnv('REINDEX_BATCH_SIZE', process.env.REINDEX_BATCH_SIZE, 100, { min: 1, max: 10000, integer: true }),
+    /** Delay between reindex batches in steady-state mode (ms). */
+    batchDelayMs: parseNumericEnv('REINDEX_BATCH_DELAY_MS', process.env.REINDEX_BATCH_DELAY_MS, 50, { min: 0, max: 60000, integer: true }),
+    /** Ledgers processed per batch in catch-up mode (further capped at 1 000 by the service). */
+    catchupBatchSize: parseNumericEnv('REINDEX_CATCHUP_BATCH_SIZE', process.env.REINDEX_CATCHUP_BATCH_SIZE, 500, { min: 1, max: 10000, integer: true }),
+    /** Remaining-ledger threshold above which catch-up mode activates. */
+    catchupThreshold: parseNumericEnv('REINDEX_CATCHUP_THRESHOLD', process.env.REINDEX_CATCHUP_THRESHOLD, 500, { min: 1, integer: true }),
+    /** Backoff when RPC returns rate-limit errors during reindex (ms). */
+    rateLimitBackoffMs: parseNumericEnv('REINDEX_RATE_LIMIT_BACKOFF_MS', process.env.REINDEX_RATE_LIMIT_BACKOFF_MS, 2000, { min: 1, max: 300000, integer: true }),
+  },
 
   // ── Indexer settings ──────────────────────────────────────────────────
   /** Finality margin: ledgers to hold back from tip to avoid reorgs. */

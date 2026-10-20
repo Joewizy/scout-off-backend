@@ -650,3 +650,80 @@ describe('parseNumericEnv validation', () => {
     delete process.env.COMPRESSION_THRESHOLD_BYTES;
   });
 });
+
+describe('config.reindex validation', () => {
+  const vars = [
+    'REINDEX_BATCH_SIZE',
+    'REINDEX_BATCH_DELAY_MS',
+    'REINDEX_CATCHUP_BATCH_SIZE',
+    'REINDEX_CATCHUP_THRESHOLD',
+    'REINDEX_RATE_LIMIT_BACKOFF_MS',
+  ];
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of vars) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.JWT_SECRET = 'test-secret';
+  });
+
+  afterEach(() => {
+    for (const key of vars) {
+      if (savedEnv[key] !== undefined) {
+        process.env[key] = savedEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+    jest.resetModules();
+  });
+
+  async function loadConfig() {
+    jest.resetModules();
+    return (await import('../src/config')).default;
+  }
+
+  it('uses defaults when unset', async () => {
+    const cfg = await loadConfig();
+    expect(cfg.reindex).toEqual({
+      batchSize: 100,
+      batchDelayMs: 50,
+      catchupBatchSize: 500,
+      catchupThreshold: 500,
+      rateLimitBackoffMs: 2000,
+    });
+  });
+
+  it('reads valid values from the environment', async () => {
+    process.env.REINDEX_BATCH_SIZE = '250';
+    process.env.REINDEX_BATCH_DELAY_MS = '0';
+    process.env.REINDEX_CATCHUP_BATCH_SIZE = '800';
+    process.env.REINDEX_CATCHUP_THRESHOLD = '1000';
+    process.env.REINDEX_RATE_LIMIT_BACKOFF_MS = '5000';
+    const cfg = await loadConfig();
+    expect(cfg.reindex).toEqual({
+      batchSize: 250,
+      batchDelayMs: 0,
+      catchupBatchSize: 800,
+      catchupThreshold: 1000,
+      rateLimitBackoffMs: 5000,
+    });
+  });
+
+  it.each([
+    ['REINDEX_BATCH_SIZE', '0'],
+    ['REINDEX_BATCH_SIZE', '10001'],
+    ['REINDEX_BATCH_SIZE', 'abc'],
+    ['REINDEX_BATCH_DELAY_MS', '-1'],
+    ['REINDEX_CATCHUP_BATCH_SIZE', '0'],
+    ['REINDEX_CATCHUP_BATCH_SIZE', '10001'],
+    ['REINDEX_CATCHUP_THRESHOLD', '0'],
+    ['REINDEX_RATE_LIMIT_BACKOFF_MS', '0'],
+  ])('%s=%s fails at startup', async (name, value) => {
+    process.env[name] = value;
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow(name);
+  });
+});
