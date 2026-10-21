@@ -284,6 +284,13 @@ env:
   ADMIN_ACTION_TTL_MS: "3600000"
   # Player cache TTL in ms. Default: 60000 (1 min).
   PLAYER_CACHE_TTL_MS: "60000"
+  # In-memory cache size caps (entries, >= 1)
+  CACHE_MAX_ENTRIES: "1000"
+  CACHE_MAX_SIZE: "1000"
+  PLAYER_CACHE_MAX_SIZE: "1000"
+  # Feature-flag and wallet-blocklist cache TTLs in ms (>= 0; 0 disables caching)
+  FEATURE_FLAG_CACHE_TTL_MS: "5000"
+  WALLET_BLOCKLIST_CACHE_TTL_MS: "30000"
 
 # -----------------------------------------------------------------------------
 # Pod annotations

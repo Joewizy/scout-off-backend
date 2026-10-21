@@ -650,3 +650,79 @@ describe('parseNumericEnv validation', () => {
     delete process.env.COMPRESSION_THRESHOLD_BYTES;
   });
 });
+
+describe('config.cache validation', () => {
+  const vars = [
+    'CACHE_MAX_ENTRIES',
+    'CACHE_MAX_SIZE',
+    'PLAYER_CACHE_MAX_SIZE',
+    'FEATURE_FLAG_CACHE_TTL_MS',
+    'WALLET_BLOCKLIST_CACHE_TTL_MS',
+  ];
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of vars) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.JWT_SECRET = 'test-secret';
+  });
+
+  afterEach(() => {
+    for (const key of vars) {
+      if (savedEnv[key] !== undefined) {
+        process.env[key] = savedEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+    jest.resetModules();
+  });
+
+  async function loadConfig() {
+    jest.resetModules();
+    return (await import('../src/config')).default;
+  }
+
+  it('uses defaults when unset', async () => {
+    const cfg = await loadConfig();
+    expect(cfg.cache).toEqual({
+      maxEntries: 1000,
+      maxSize: 1000,
+      playerMaxSize: 1000,
+      featureFlagTtlMs: 5000,
+      walletBlocklistTtlMs: 30000,
+    });
+  });
+
+  it('reads valid values from the environment', async () => {
+    process.env.CACHE_MAX_ENTRIES = '200';
+    process.env.CACHE_MAX_SIZE = '300';
+    process.env.PLAYER_CACHE_MAX_SIZE = '400';
+    process.env.FEATURE_FLAG_CACHE_TTL_MS = '0';
+    process.env.WALLET_BLOCKLIST_CACHE_TTL_MS = '10000';
+    const cfg = await loadConfig();
+    expect(cfg.cache).toEqual({
+      maxEntries: 200,
+      maxSize: 300,
+      playerMaxSize: 400,
+      featureFlagTtlMs: 0,
+      walletBlocklistTtlMs: 10000,
+    });
+  });
+
+  it.each([
+    ['CACHE_MAX_ENTRIES', '0'],
+    ['CACHE_MAX_ENTRIES', 'abc'],
+    ['CACHE_MAX_SIZE', '0'],
+    ['PLAYER_CACHE_MAX_SIZE', '-5'],
+    ['FEATURE_FLAG_CACHE_TTL_MS', '-1'],
+    ['FEATURE_FLAG_CACHE_TTL_MS', 'abc'],
+    ['WALLET_BLOCKLIST_CACHE_TTL_MS', '-1'],
+  ])('%s=%s fails at startup', async (name, value) => {
+    process.env[name] = value;
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow(name);
+  });
+});
