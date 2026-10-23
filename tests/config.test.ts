@@ -651,6 +651,143 @@ describe('parseNumericEnv validation', () => {
   });
 });
 
+describe('config.reindex validation', () => {
+  const vars = [
+    'REINDEX_BATCH_SIZE',
+    'REINDEX_BATCH_DELAY_MS',
+    'REINDEX_CATCHUP_BATCH_SIZE',
+    'REINDEX_CATCHUP_THRESHOLD',
+    'REINDEX_RATE_LIMIT_BACKOFF_MS',
+  ];
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of vars) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.JWT_SECRET = 'test-secret';
+  });
+
+  afterEach(() => {
+    for (const key of vars) {
+      if (savedEnv[key] !== undefined) {
+        process.env[key] = savedEnv[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+    jest.resetModules();
+  });
+
+  async function loadConfig() {
+    jest.resetModules();
+    return (await import('../src/config')).default;
+  }
+
+  it('uses defaults when unset', async () => {
+    const cfg = await loadConfig();
+    expect(cfg.reindex).toEqual({
+      batchSize: 100,
+      batchDelayMs: 50,
+      catchupBatchSize: 500,
+      catchupThreshold: 500,
+      rateLimitBackoffMs: 2000,
+    });
+  });
+
+  it('reads valid values from the environment', async () => {
+    process.env.REINDEX_BATCH_SIZE = '250';
+    process.env.REINDEX_BATCH_DELAY_MS = '0';
+    process.env.REINDEX_CATCHUP_BATCH_SIZE = '800';
+    process.env.REINDEX_CATCHUP_THRESHOLD = '1000';
+    process.env.REINDEX_RATE_LIMIT_BACKOFF_MS = '5000';
+    const cfg = await loadConfig();
+    expect(cfg.reindex).toEqual({
+      batchSize: 250,
+      batchDelayMs: 0,
+      catchupBatchSize: 800,
+      catchupThreshold: 1000,
+      rateLimitBackoffMs: 5000,
+    });
+  });
+
+  it.each([
+    ['REINDEX_BATCH_SIZE', '0'],
+    ['REINDEX_BATCH_SIZE', '10001'],
+    ['REINDEX_BATCH_SIZE', 'abc'],
+    ['REINDEX_BATCH_DELAY_MS', '-1'],
+    ['REINDEX_CATCHUP_BATCH_SIZE', '0'],
+    ['REINDEX_CATCHUP_BATCH_SIZE', '10001'],
+    ['REINDEX_CATCHUP_THRESHOLD', '0'],
+    ['REINDEX_RATE_LIMIT_BACKOFF_MS', '0'],
+  ])('%s=%s fails at startup', async (name, value) => {
+    process.env[name] = value;
+    jest.resetModules();
+    await expect(import('../src/config')).rejects.toThrow(name);
+  });
+});
+
+describe('config .env loading', () => {
+  const PROBE = 'DOTENV_LOADING_PROBE';
+  const saved = { ...process.env };
+  let tmpDir: string;
+  let cwdSpy: jest.SpyInstance;
+  let infoSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs') as typeof import('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require('os') as typeof import('os');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require('path') as typeof import('path');
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scout-off-dotenv-'));
+    fs.writeFileSync(path.join(tmpDir, '.env'), `${PROBE}=from-dotenv\n`);
+    cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(tmpDir);
+    infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+    delete process.env[PROBE];
+    delete process.env.DOTENV_ENABLED;
+  });
+
+  afterEach(() => {
+    cwdSpy.mockRestore();
+    infoSpy.mockRestore();
+    process.env = { ...saved };
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('fs') as typeof import('fs')).rmSync(tmpDir, { recursive: true, force: true });
+    jest.resetModules();
+  });
+
+  async function importConfigAs(env: string) {
+    process.env.NODE_ENV = env;
+    process.env.ADMIN_WALLET = 'GADMINWALLET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    process.env.JWT_SECRET = 'k8Zq3vN1pW7xR4tY9bM2cF6hJ0lD5sGaQe';
+    process.env.PLATFORM_SECRET_KEY = 'SPLATFORMSECRETKEY1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    process.env.SEP10_SERVER_SECRET = 'SSEP10SERVERSECRET1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    process.env.API_KEY_LOOKUP_SECRET = 'a'.repeat(64);
+    jest.resetModules();
+    await import('../src/config');
+  }
+
+  it.each(['production', 'staging'])('does not load .env when NODE_ENV=%s', async (env) => {
+    await importConfigAs(env);
+    expect(process.env[PROBE]).toBeUndefined();
+  });
+
+  it('loads .env in production when DOTENV_ENABLED=true', async () => {
+    process.env.DOTENV_ENABLED = 'true';
+    await importConfigAs('production');
+    expect(process.env[PROBE]).toBe('from-dotenv');
+    expect(infoSpy).toHaveBeenCalledWith('[config] loaded .env file');
+  });
+
+  it.each(['development', 'test'])('still loads .env when NODE_ENV=%s', async (env) => {
+    await importConfigAs(env);
+    expect(process.env[PROBE]).toBe('from-dotenv');
+  });
+});
+
 describe('config.sse validation', () => {
   const vars = [
     'SSE_KEEPALIVE_INTERVAL_MS',
