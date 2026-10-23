@@ -4,11 +4,10 @@ initTracing();
 import app, { setDraining } from "./app";
 import config from "./config";
 import { logger } from "./utils/logger";
-import { initDb, closeDb } from "./db";
+import { initDb, closeDb, fetchLastIndexedLedger, persistLastIndexedLedger } from "./db";
 import { stellarHealth } from "./services/stellar";
 import { checkHealth, retryPendingPins, reconcilePendingPins } from "./services/ipfs";
 import { indexEvents } from "./services/indexer";
-import { fetchLastIndexedLedger, persistLastIndexedLedger } from "./db";
 import { initBlocklist } from "./services/tokenBlocklist";
 import { startDecayTimer } from "./services/ipReputation";
 import {
@@ -20,11 +19,12 @@ import {
   closeSecurityEventSubscriber,
 } from "./services/securityEventPubSub";
 import { closeRedisClients } from "./services/redis";
-import { runTierDivergenceCheck } from "./services/tierDivergenceJob";
-import { getTierDivergenceTotal } from "./services/tierDivergenceJob";
+import { runTierDivergenceCheck, getTierDivergenceTotal } from "./services/tierDivergenceJob";
 import { setTierDivergenceGetter } from "./middleware/metrics";
+import { incUnhandledRejections } from "./middleware/metrics";
 import { drainAllSessions, setAcceptingSseSessions } from "./routes/events";
 import http from "http";
+import { applyHttpTimeouts } from "./httpServer";
 
 // Database initialization is now async - must be awaited
 async function start() {
@@ -74,7 +74,11 @@ async function startServer() {
     logger.info(
       `ScoutOff backend running on port ${config.port} [${config.network}]`,
     );
-
+    applyHttpTimeouts(server, config.http);
+    logger.info(
+      `HTTP timeouts: keepAlive=${config.http.keepAliveTimeoutMs}ms ` +
+      `headers=${config.http.headersTimeoutMs}ms request=${config.http.requestTimeoutMs}ms`,
+    );
     // Log startup health of critical dependencies
     (async () => {
       const statuses: Record<string, string> = {};
@@ -131,7 +135,7 @@ async function startServer() {
   poll();
   const pollInterval = setInterval(poll, 5_000);
 
-  // Poll for IPFS retries every 30 seconds
+  // Poll for IPFS retries
   const retryPins = withJobTracking(async () => {
     try {
       await retryPendingPins();
@@ -140,7 +144,11 @@ async function startServer() {
     }
   });
 
-  const retryInterval = setInterval(retryPins, 30_000);
+  // Run once at startup for consistency with the reconcile and divergence
+  // jobs, then schedule the interval. The interval is configurable via
+  // IPFS_PIN_RETRY_INTERVAL_MS (default: 30000, min: 5000).
+  retryPins();
+  const retryInterval = setInterval(retryPins, config.ipfsPinRetryIntervalMs);
 
   // Scheduled reconciliation of pending pins against Pinata & IPFS gateways
   const reconcilePins = withJobTracking(async () => {
@@ -177,19 +185,11 @@ async function startServer() {
   //   5. Drain SSE sessions  → send session_ended(server_shutdown) and end each stream
   //   6. server.close()      → stop accepting new HTTP connections
   //   7. Close Redis, DB, tracing
-  //   8. exit 0
+  //   8. exit with provided exit code
 
-  const SHUTDOWN_TIMEOUT_MS = parseInt(
-    process.env.SHUTDOWN_TIMEOUT_MS ?? '10000',
-    10,
-  );
-  const SHUTDOWN_PRESTOP_DELAY_MS = parseInt(
-    process.env.SHUTDOWN_PRESTOP_DELAY_MS ?? '0',
-    10,
-  );
   let isShuttingDown = false;
 
-  const shutdown = async (signal: string) => {
+  const shutdown = async (signal: string, exitCode = 0) => {
     if (isShuttingDown) return;
     isShuttingDown = true;
     logger.info(`Received ${signal}, starting graceful shutdown...`);
@@ -199,17 +199,17 @@ async function startServer() {
     setAcceptingSseSessions(false);
 
     // Step 2: optional pre-stop delay for load-balancer observation of 503.
-    if (SHUTDOWN_PRESTOP_DELAY_MS > 0) {
-      logger.info(`[shutdown] pre-stop delay ${SHUTDOWN_PRESTOP_DELAY_MS}ms`);
-      await new Promise((r) => setTimeout(r, SHUTDOWN_PRESTOP_DELAY_MS));
+    if (config.shutdown.prestopDelayMs > 0) {
+      logger.info(`[shutdown] pre-stop delay ${config.shutdown.prestopDelayMs}ms`);
+      await new Promise((r) => setTimeout(r, config.shutdown.prestopDelayMs));
     }
 
     const forceExitTimer = setTimeout(() => {
       logger.error(
-        `Graceful shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms, forcing exit`,
+        `Graceful shutdown timed out after ${config.shutdown.timeoutMs}ms, forcing exit`,
       );
       process.exit(1);
-    }, SHUTDOWN_TIMEOUT_MS);
+    }, config.shutdown.timeoutMs);
     forceExitTimer.unref();
 
     // Step 3: stop schedulers so no new jobs start.
@@ -221,7 +221,7 @@ async function startServer() {
     // Step 4: await in-flight job executions (bounded to 60 % of total timeout).
     if (inFlightJobs > 0) {
       logger.info(`[shutdown] waiting for ${inFlightJobs} in-flight job(s)...`);
-      const jobDrainDeadline = Date.now() + Math.floor(SHUTDOWN_TIMEOUT_MS * 0.6);
+      const jobDrainDeadline = Date.now() + Math.floor(config.shutdown.timeoutMs * 0.6);
       while (inFlightJobs > 0 && Date.now() < jobDrainDeadline) {
         await new Promise((r) => setTimeout(r, 100));
       }
@@ -277,7 +277,7 @@ async function startServer() {
     }
 
     clearTimeout(forceExitTimer);
-    process.exit(0);
+    process.exit(exitCode);
   };
 
   process.on("SIGTERM", () => { shutdown("SIGTERM").catch(() => process.exit(1)); });
@@ -288,6 +288,7 @@ async function startServer() {
 
   process.on("unhandledRejection", (reason: unknown) => {
     unhandledRejectionsTotal += 1;
+    incUnhandledRejections();
     const err = reason instanceof Error ? reason : new Error(String(reason));
     logger.error(
       `Unhandled promise rejection (scout_off_unhandled_rejections_total=${unhandledRejectionsTotal}):`,
@@ -295,14 +296,13 @@ async function startServer() {
     );
     // Do not exit by default; set EXIT_ON_UNHANDLED_REJECTION=true to opt in.
     if (config.exitOnUnhandledRejection) {
-      shutdown("unhandledRejection");
+      shutdown("unhandledRejection", 1);
     }
   });
 
   process.on("uncaughtException", (err: Error) => {
     logger.error("Uncaught exception, shutting down:", err.stack ?? err.message);
-    shutdown("uncaughtException");
-    process.exitCode = 1;
+    shutdown("uncaughtException", 1);
   });
 }
 
