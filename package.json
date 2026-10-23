@@ -2,6 +2,7 @@
   "name": "scout-off-backend",
   "version": "1.0.0",
   "description": "Backend API for ScoutOff — decentralized football scouting platform on Stellar",
+  "license": "Apache-2.0",
   "main": "dist/index.js",
   "engines": {
     "node": ">=22.0.0 <25.0.0",
@@ -25,6 +26,7 @@
     "test:postgres": "node scripts/run-postgres-tests.js",
     "test:watch": "node node_modules/jest/bin/jest.js --watch",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts' 'scripts/*.ts' --ext .ts",
+    "lint:fix": "eslint 'src/**/*.ts' 'tests/**/*.ts' 'scripts/*.ts' --ext .ts --fix",
     "seed": "ts-node --project tsconfig.scripts.json scripts/seed.ts",
     "migration:status": "ts-node --project tsconfig.scripts.json scripts/migration-status.ts",
     "build:openapi": "node scripts/generate-openapi-json.js",
